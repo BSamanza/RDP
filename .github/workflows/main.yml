@@ -37,7 +37,24 @@ jobs:
 
       - name: Create RDP User (fixed password)
         run: |
-          $securePass = ConvertTo-SecureString $env:RDP_PASSWORD -AsPlainText -Force
+          function Get-ValidRdpPassword([string]$password) {
+            if ([string]::IsNullOrWhiteSpace($password)) {
+              throw "RDP_PASSWORD is empty."
+            }
+
+            $effective = $password
+
+            if ($effective -cnotmatch '[A-Z]') { $effective += 'A' }
+            if ($effective -notmatch '[a-z]') { $effective += 'a' }
+            if ($effective -notmatch '\d') { $effective += '9' }
+            if ($effective -notmatch '[^a-zA-Z0-9]') { $effective += '!' }
+            if ($effective.Length -lt 8) { $effective += ('x' * (8 - $effective.Length)) }
+
+            return $effective
+          }
+
+          $effectivePassword = Get-ValidRdpPassword $env:RDP_PASSWORD
+          $securePass = ConvertTo-SecureString $effectivePassword -AsPlainText -Force
 
           if (Get-LocalUser -Name $env:RDP_USERNAME -ErrorAction SilentlyContinue) {
             Remove-LocalUser -Name $env:RDP_USERNAME -ErrorAction SilentlyContinue
@@ -51,6 +68,8 @@ jobs:
               Write-Error "User creation failed"
               exit 1
           }
+
+          "RDP_EFFECTIVE_PASSWORD=$effectivePassword" >> $env:GITHUB_ENV
 
       - name: Install Tailscale
         run: |
@@ -184,7 +203,7 @@ jobs:
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: $env:RDP_USERNAME"
-          Write-Host "Password hint: use your fixed RDP_PASSWORD GitHub secret"
+          Write-Host "Password: $env:RDP_EFFECTIVE_PASSWORD"
           Write-Host "==================`n"
 
           while ($true) {
