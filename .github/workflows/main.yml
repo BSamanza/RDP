@@ -126,8 +126,8 @@ jobs:
           import gdown
 
           urls = [
-              "https://drive.google.com/file/d/13YCSrDW13FcRDnezQktyKJEll8hFDtaC/view?usp=drive_link",
-              "https://drive.google.com/file/d/10sXxJr36wis7ZXg5VZ23BcJBnNnk-QQg/view?usp=drive_link",
+    "https://drive.google.com/file/d/12SpK3QScQ_AfG2Cl5QuCFIahn8WMlbhl/view?usp=sharing",
+    "https://drive.google.com/file/d/1f-qYF_0O2y81eFrlp86rVAmoMMCXm1RI/view?usp=sharing",
           ]
 
           username = os.environ["RDP_USERNAME"]
