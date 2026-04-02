@@ -9,16 +9,9 @@ jobs:
     timeout-minutes: 360
     env:
       RDP_USERNAME: RDP
-      RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+      RDP_PASSWORD: mehdi12340
 
     steps:
-      - name: Validate required secrets
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:RDP_PASSWORD)) {
-            Write-Error "Missing required GitHub secret: RDP_PASSWORD"
-            exit 1
-          }
-
       - name: Configure Core RDP Settings
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
@@ -35,25 +28,37 @@ jobs:
 
           Restart-Service -Name TermService -Force
 
+      - name: Allow Exact Fixed Password
+        run: |
+          $policyPath = Join-Path $env:TEMP "rdp-password-policy.inf"
+          $dbPath = Join-Path $env:TEMP "rdp-password-policy.sdb"
+
+          @'
+[Unicode]
+Unicode=yes
+[Version]
+signature="$CHICAGO$"
+Revision=1
+[System Access]
+MinimumPasswordAge = 0
+MaximumPasswordAge = 42
+MinimumPasswordLength = 0
+PasswordComplexity = 0
+PasswordHistorySize = 0
+          '@ | Set-Content -Path $policyPath -Encoding ASCII
+
+          secedit /configure /db $dbPath /cfg $policyPath /areas SECURITYPOLICY
+
+          Remove-Item $policyPath -Force -ErrorAction SilentlyContinue
+          Remove-Item $dbPath -Force -ErrorAction SilentlyContinue
+
       - name: Create RDP User (fixed password)
         run: |
-          function Get-ValidRdpPassword([string]$password) {
-            if ([string]::IsNullOrWhiteSpace($password)) {
-              throw "RDP_PASSWORD is empty."
-            }
-
-            $effective = $password
-
-            if ($effective -cnotmatch '[A-Z]') { $effective += 'A' }
-            if ($effective -notmatch '[a-z]') { $effective += 'a' }
-            if ($effective -notmatch '\d') { $effective += '9' }
-            if ($effective -notmatch '[^a-zA-Z0-9]') { $effective += '!' }
-            if ($effective.Length -lt 8) { $effective += ('x' * (8 - $effective.Length)) }
-
-            return $effective
+          if ([string]::IsNullOrWhiteSpace($env:RDP_PASSWORD)) {
+            throw "RDP_PASSWORD is empty."
           }
 
-          $effectivePassword = Get-ValidRdpPassword $env:RDP_PASSWORD
+          $effectivePassword = $env:RDP_PASSWORD
           $securePass = ConvertTo-SecureString $effectivePassword -AsPlainText -Force
 
           if (Get-LocalUser -Name $env:RDP_USERNAME -ErrorAction SilentlyContinue) {
