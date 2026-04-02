@@ -140,22 +140,103 @@ jobs:
             return $defaultName
           }
 
+          function Convert-GoogleDriveValue([string]$value) {
+            $decoded = $value `
+              -replace '\\u003d', '=' `
+              -replace '\\u0026', '&' `
+              -replace '\\u002f', '/' `
+              -replace '\\/', '/'
+
+            $decoded = [System.Net.WebUtility]::HtmlDecode($decoded)
+
+            if ($decoded.StartsWith("//")) {
+              return "https:$decoded"
+            }
+
+            if ($decoded.StartsWith("/")) {
+              return "https://drive.google.com$decoded"
+            }
+
+            return $decoded
+          }
+
+          function Get-GoogleDriveDownloadUrl([string]$html, [string]$fileId) {
+            $patterns = @(
+              '"downloadUrl":"(?<url>[^"]+)"',
+              'href="(?<url>/uc\?export=download[^"]+)"',
+              'href="(?<url>/open\?id=[^"]+)"'
+            )
+
+            foreach ($pattern in $patterns) {
+              $match = [regex]::Match($html, $pattern)
+              if ($match.Success) {
+                return Convert-GoogleDriveValue $match.Groups["url"].Value
+              }
+            }
+
+            $confirmMatch = [regex]::Match($html, 'confirm=([0-9A-Za-z_-]+)')
+            if ($confirmMatch.Success) {
+              return "https://drive.google.com/uc?export=download&confirm=$($confirmMatch.Groups[1].Value)&id=$fileId"
+            }
+
+            return $null
+          }
+
           function Download-GoogleDriveFile([string]$shareUrl, [string]$workingPath) {
             $fileId = Get-GoogleDriveFileId $shareUrl
             $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
-            $initialUrl = "https://drive.google.com/uc?export=download&id=$fileId"
-            $response = Invoke-WebRequest -Uri $initialUrl -WebSession $session
-
-            $confirmMatch = [regex]::Match($response.Content, 'confirm=([0-9A-Za-z_]+)')
-            if ($confirmMatch.Success) {
-              $downloadUrl = "https://drive.google.com/uc?export=download&confirm=$($confirmMatch.Groups[1].Value)&id=$fileId"
-            }
-            else {
-              $downloadUrl = $initialUrl
-            }
-
             $tempFile = Join-Path $workingPath "$fileId.download"
-            $downloadResponse = Invoke-WebRequest -Uri $downloadUrl -WebSession $session -OutFile $tempFile -PassThru
+            $candidates = [System.Collections.Generic.List[string]]::new()
+            $candidates.Add($shareUrl)
+            $candidates.Add("https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t")
+            $candidates.Add("https://drive.google.com/uc?export=download&confirm=t&id=$fileId")
+            $candidates.Add("https://drive.google.com/uc?export=download&id=$fileId")
+
+            $attempted = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            $lastError = $null
+            $downloadResponse = $null
+
+            while ($candidates.Count -gt 0) {
+              $candidate = $candidates[0]
+              $candidates.RemoveAt(0)
+
+              if ([string]::IsNullOrWhiteSpace($candidate) -or -not $attempted.Add($candidate)) {
+                continue
+              }
+
+              try {
+                $response = Invoke-WebRequest -Uri $candidate -WebSession $session -MaximumRedirection 5
+                $contentDisposition = [string]$response.Headers["Content-Disposition"]
+                $contentType = [string]$response.Headers["Content-Type"]
+
+                if ($contentDisposition) {
+                  [System.IO.File]::WriteAllText($tempFile, $response.Content)
+                  $downloadResponse = Invoke-WebRequest -Uri $candidate -WebSession $session -OutFile $tempFile -PassThru -MaximumRedirection 5
+                  break
+                }
+
+                $nextUrl = Get-GoogleDriveDownloadUrl $response.Content $fileId
+                if ($nextUrl) {
+                  $candidates.Add($nextUrl)
+                  continue
+                }
+
+                if ($contentType -and $contentType -notmatch 'text/html') {
+                  $downloadResponse = Invoke-WebRequest -Uri $candidate -WebSession $session -OutFile $tempFile -PassThru -MaximumRedirection 5
+                  break
+                }
+
+                $lastError = "Received HTML instead of a downloadable file from $candidate"
+              }
+              catch {
+                $lastError = $_.Exception.Message
+              }
+            }
+
+            if (-not $downloadResponse) {
+              throw "Unable to download Google Drive file $fileId. $lastError"
+            }
+
             $fileName = Get-DownloadFileName $downloadResponse "$fileId.bin"
             return [pscustomobject]@{
               FileName = $fileName
@@ -181,19 +262,24 @@ jobs:
           )
 
           foreach ($url in $urls) {
-            $download = Download-GoogleDriveFile $url $workingPath
-            $savedFiles = @()
-            foreach ($desktopPath in $desktopPaths) {
-              $destination = Join-Path $desktopPath $download.FileName
-              Copy-Item -Path $download.TempPath -Destination $destination -Force
-              $savedFiles += $destination
-            }
+            try {
+              $download = Download-GoogleDriveFile $url $workingPath
+              $savedFiles = @()
+              foreach ($desktopPath in $desktopPaths) {
+                $destination = Join-Path $desktopPath $download.FileName
+                Copy-Item -Path $download.TempPath -Destination $destination -Force
+                $savedFiles += $destination
+              }
 
-            foreach ($savedFile in $savedFiles) {
-              Write-Host "Saved startup file: $savedFile"
-            }
+              foreach ($savedFile in $savedFiles) {
+                Write-Host "Saved startup file: $savedFile"
+              }
 
-            Remove-Item -Path $download.TempPath -Force -ErrorAction SilentlyContinue
+              Remove-Item -Path $download.TempPath -Force -ErrorAction SilentlyContinue
+            }
+            catch {
+              Write-Warning "Skipping startup file because download failed for $url - $($_.Exception.Message)"
+            }
           }
 
           Remove-Item -Path $workingPath -Recurse -Force -ErrorAction SilentlyContinue
