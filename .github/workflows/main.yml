@@ -140,18 +140,27 @@ jobs:
               for desktop in desktop_paths:
                   os.makedirs(desktop, exist_ok=True)
 
-              for url in urls:
-                  try:
-                      downloaded = gdown.download(url=url, output=working_dir, fuzzy=True, quiet=True)
-                      if not downloaded or not os.path.exists(downloaded):
-                          raise RuntimeError("gdown did not return a downloaded file path")
+              original_cwd = os.getcwd()
+              os.chdir(working_dir)
+              try:
+                  for url in urls:
+                      try:
+                          downloaded = gdown.download(url=url, fuzzy=True, quiet=True)
+                          if not downloaded:
+                              raise RuntimeError("gdown did not return a downloaded file path")
 
-                      for desktop in desktop_paths:
-                          destination = os.path.join(desktop, os.path.basename(downloaded))
-                          shutil.copy2(downloaded, destination)
-                          print(f"Saved startup file: {destination}")
-                  except Exception as exc:
-                      warnings.warn(f"Skipping startup file because download failed for {url} - {exc}")
+                          downloaded = os.path.abspath(downloaded)
+                          if not os.path.exists(downloaded):
+                              raise RuntimeError(f"Downloaded file not found: {downloaded}")
+
+                          for desktop in desktop_paths:
+                              destination = os.path.join(desktop, os.path.basename(downloaded))
+                              shutil.copy2(downloaded, destination)
+                              print(f"Saved startup file: {destination}")
+                      except Exception as exc:
+                          warnings.warn(f"Skipping startup file because download failed for {url} - {exc}")
+              finally:
+                  os.chdir(original_cwd)
           '@ | Set-Content -Path $scriptPath
 
           python $scriptPath
