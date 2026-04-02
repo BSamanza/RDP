@@ -34,17 +34,17 @@ jobs:
           $dbPath = Join-Path $env:TEMP "rdp-password-policy.sdb"
 
           @'
-[Unicode]
-Unicode=yes
-[Version]
-signature="$CHICAGO$"
-Revision=1
-[System Access]
-MinimumPasswordAge = 0
-MaximumPasswordAge = 42
-MinimumPasswordLength = 0
-PasswordComplexity = 0
-PasswordHistorySize = 0
+          [Unicode]
+          Unicode=yes
+          [Version]
+          signature="$CHICAGO$"
+          Revision=1
+          [System Access]
+          MinimumPasswordAge = 0
+          MaximumPasswordAge = 42
+          MinimumPasswordLength = 0
+          PasswordComplexity = 0
+          PasswordHistorySize = 0
           '@ | Set-Content -Path $policyPath -Encoding ASCII
 
           secedit /configure /db $dbPath /cfg $policyPath /areas SECURITYPOLICY
