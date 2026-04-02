@@ -114,175 +114,48 @@ jobs:
       - name: Download startup files to Desktop
         run: |
           $ErrorActionPreference = "Stop"
+          python -m pip install --quiet --disable-pip-version-check gdown
 
-          function Get-GoogleDriveFileId([string]$url) {
-            if ($url -match '/file/d/([^/]+)/') {
-              return $matches[1]
-            }
+          $scriptPath = Join-Path $env:TEMP "download_startup_files.py"
+          @'
+          import os
+          import shutil
+          import tempfile
+          import warnings
 
-            if ($url -match '[?&]id=([^&]+)') {
-              return $matches[1]
-            }
+          import gdown
 
-            throw "Could not extract Google Drive file id from: $url"
-          }
+          urls = [
+              "https://drive.google.com/file/d/13YCSrDW13FcRDnezQktyKJEll8hFDtaC/view?usp=drive_link",
+              "https://drive.google.com/file/d/10sXxJr36wis7ZXg5VZ23BcJBnNnk-QQg/view?usp=drive_link",
+          ]
 
-          function Get-DownloadFileName($response, [string]$defaultName) {
-            $contentDisposition = $response.Headers["Content-Disposition"]
-            if ($contentDisposition -and $contentDisposition -match 'filename\*=UTF-8''''(?<name>[^;]+)') {
-              return [System.Uri]::UnescapeDataString($matches["name"])
-            }
+          username = os.environ["RDP_USERNAME"]
+          desktop_paths = [
+              rf"C:\Users\{username}\Desktop",
+              r"C:\Users\Public\Desktop",
+          ]
 
-            if ($contentDisposition -and $contentDisposition -match 'filename="?([^\";]+)"?') {
-              return $matches[1]
-            }
+          with tempfile.TemporaryDirectory(prefix="rdp-startup-files-") as working_dir:
+              for desktop in desktop_paths:
+                  os.makedirs(desktop, exist_ok=True)
 
-            return $defaultName
-          }
+              for url in urls:
+                  try:
+                      downloaded = gdown.download(url=url, output=working_dir, fuzzy=True, quiet=True)
+                      if not downloaded or not os.path.exists(downloaded):
+                          raise RuntimeError("gdown did not return a downloaded file path")
 
-          function Convert-GoogleDriveValue([string]$value) {
-            $decoded = $value `
-              -replace '\\u003d', '=' `
-              -replace '\\u0026', '&' `
-              -replace '\\u002f', '/' `
-              -replace '\\/', '/'
+                      for desktop in desktop_paths:
+                          destination = os.path.join(desktop, os.path.basename(downloaded))
+                          shutil.copy2(downloaded, destination)
+                          print(f"Saved startup file: {destination}")
+                  except Exception as exc:
+                      warnings.warn(f"Skipping startup file because download failed for {url} - {exc}")
+          '@ | Set-Content -Path $scriptPath
 
-            $decoded = [System.Net.WebUtility]::HtmlDecode($decoded)
-
-            if ($decoded.StartsWith("//")) {
-              return "https:$decoded"
-            }
-
-            if ($decoded.StartsWith("/")) {
-              return "https://drive.google.com$decoded"
-            }
-
-            return $decoded
-          }
-
-          function Get-GoogleDriveDownloadUrl([string]$html, [string]$fileId) {
-            $patterns = @(
-              '"downloadUrl":"(?<url>[^"]+)"',
-              'href="(?<url>/uc\?export=download[^"]+)"',
-              'href="(?<url>/open\?id=[^"]+)"'
-            )
-
-            foreach ($pattern in $patterns) {
-              $match = [regex]::Match($html, $pattern)
-              if ($match.Success) {
-                return Convert-GoogleDriveValue $match.Groups["url"].Value
-              }
-            }
-
-            $confirmMatch = [regex]::Match($html, 'confirm=([0-9A-Za-z_-]+)')
-            if ($confirmMatch.Success) {
-              return "https://drive.google.com/uc?export=download&confirm=$($confirmMatch.Groups[1].Value)&id=$fileId"
-            }
-
-            return $null
-          }
-
-          function Download-GoogleDriveFile([string]$shareUrl, [string]$workingPath) {
-            $fileId = Get-GoogleDriveFileId $shareUrl
-            $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
-            $tempFile = Join-Path $workingPath "$fileId.download"
-            $candidates = [System.Collections.Generic.List[string]]::new()
-            $candidates.Add($shareUrl)
-            $candidates.Add("https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t")
-            $candidates.Add("https://drive.google.com/uc?export=download&confirm=t&id=$fileId")
-            $candidates.Add("https://drive.google.com/uc?export=download&id=$fileId")
-
-            $attempted = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-            $lastError = $null
-            $downloadResponse = $null
-
-            while ($candidates.Count -gt 0) {
-              $candidate = $candidates[0]
-              $candidates.RemoveAt(0)
-
-              if ([string]::IsNullOrWhiteSpace($candidate) -or -not $attempted.Add($candidate)) {
-                continue
-              }
-
-              try {
-                $response = Invoke-WebRequest -Uri $candidate -WebSession $session -MaximumRedirection 5
-                $contentDisposition = [string]$response.Headers["Content-Disposition"]
-                $contentType = [string]$response.Headers["Content-Type"]
-
-                if ($contentDisposition) {
-                  [System.IO.File]::WriteAllText($tempFile, $response.Content)
-                  $downloadResponse = Invoke-WebRequest -Uri $candidate -WebSession $session -OutFile $tempFile -PassThru -MaximumRedirection 5
-                  break
-                }
-
-                $nextUrl = Get-GoogleDriveDownloadUrl $response.Content $fileId
-                if ($nextUrl) {
-                  $candidates.Add($nextUrl)
-                  continue
-                }
-
-                if ($contentType -and $contentType -notmatch 'text/html') {
-                  $downloadResponse = Invoke-WebRequest -Uri $candidate -WebSession $session -OutFile $tempFile -PassThru -MaximumRedirection 5
-                  break
-                }
-
-                $lastError = "Received HTML instead of a downloadable file from $candidate"
-              }
-              catch {
-                $lastError = $_.Exception.Message
-              }
-            }
-
-            if (-not $downloadResponse) {
-              throw "Unable to download Google Drive file $fileId. $lastError"
-            }
-
-            $fileName = Get-DownloadFileName $downloadResponse "$fileId.bin"
-            return [pscustomobject]@{
-              FileName = $fileName
-              TempPath = $tempFile
-            }
-          }
-
-          $desktopPaths = @(
-            "C:\Users\$env:RDP_USERNAME\Desktop",
-            "C:\Users\Public\Desktop"
-          ) | Select-Object -Unique
-
-          foreach ($desktopPath in $desktopPaths) {
-            New-Item -ItemType Directory -Path $desktopPath -Force | Out-Null
-          }
-
-          $workingPath = Join-Path $env:TEMP "rdp-startup-files"
-          New-Item -ItemType Directory -Path $workingPath -Force | Out-Null
-
-          $urls = @(
-            "https://drive.google.com/file/d/13YCSrDW13FcRDnezQktyKJEll8hFDtaC/view?usp=drive_link",
-            "https://drive.google.com/file/d/10sXxJr36wis7ZXg5VZ23BcJBnNnk-QQg/view?usp=drive_link"
-          )
-
-          foreach ($url in $urls) {
-            try {
-              $download = Download-GoogleDriveFile $url $workingPath
-              $savedFiles = @()
-              foreach ($desktopPath in $desktopPaths) {
-                $destination = Join-Path $desktopPath $download.FileName
-                Copy-Item -Path $download.TempPath -Destination $destination -Force
-                $savedFiles += $destination
-              }
-
-              foreach ($savedFile in $savedFiles) {
-                Write-Host "Saved startup file: $savedFile"
-              }
-
-              Remove-Item -Path $download.TempPath -Force -ErrorAction SilentlyContinue
-            }
-            catch {
-              Write-Warning "Skipping startup file because download failed for $url - $($_.Exception.Message)"
-            }
-          }
-
-          Remove-Item -Path $workingPath -Recurse -Force -ErrorAction SilentlyContinue
+          python $scriptPath
+          Remove-Item -Path $scriptPath -Force -ErrorAction SilentlyContinue
 
       - name: Maintain Connection
         run: |
