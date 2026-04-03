@@ -106,6 +106,7 @@ jobs:
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
       - name: Verify RDP Accessibility
+        id: verify_rdp
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
 
@@ -115,6 +116,13 @@ jobs:
               exit 1
           }
           Write-Host "TCP connectivity successful!"
+          "tailscale_ip=$env:TAILSCALE_IP" >> $env:GITHUB_OUTPUT
+
+      - name: RDP Ready (${{ steps.verify_rdp.outputs.tailscale_ip }})
+        run: |
+          Write-Host "RDP is ready on $env:TAILSCALE_IP"
+          Write-Host "Username: $env:RDP_USERNAME"
+          Write-Host "Password: $env:RDP_EFFECTIVE_PASSWORD"
 
       - name: Download startup files to Desktop
         run: |
