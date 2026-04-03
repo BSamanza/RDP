@@ -124,6 +124,38 @@ jobs:
           Write-Host "Username: $env:RDP_USERNAME"
           Write-Host "Password: $env:RDP_EFFECTIVE_PASSWORD"
 
+      - name: Install WinRAR
+        run: |
+          $winRarUrl = "https://www.rarlab.com/rar/winrar-x64-720.exe"
+          $installerPath = Join-Path $env:TEMP "winrar-x64-720.exe"
+
+          Invoke-WebRequest -Uri $winRarUrl -OutFile $installerPath
+          Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait
+          Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+
+      - name: Install Telegram Desktop
+        run: |
+          $telegramUrl = "https://telegram.org/dl/desktop/win64"
+          $installerPath = Join-Path $env:TEMP "TelegramSetup.exe"
+
+          Invoke-WebRequest -Uri $telegramUrl -OutFile $installerPath
+          Start-Process -FilePath $installerPath -ArgumentList "/VERYSILENT", "/NORESTART" -Wait
+          Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+
+          $telegramCandidates = @(
+            "$env:APPDATA\Telegram Desktop\Telegram.exe",
+            "$env:LOCALAPPDATA\Telegram Desktop\Telegram.exe",
+            "$env:LOCALAPPDATA\Programs\Telegram Desktop\Telegram.exe"
+          )
+
+          foreach ($candidate in $telegramCandidates) {
+            if (Test-Path $candidate) {
+              Start-Process -FilePath $candidate
+              Write-Host "Telegram launched: $candidate"
+              break
+            }
+          }
+
       - name: Download startup files to Desktop
         run: |
           $ErrorActionPreference = "Stop"
